@@ -59,7 +59,7 @@ The configuration uses static MAC addresses with DHCP reservations:
 ### 1. Clone and Setup
 ```bash
 git clone <your-repo>
-cd talos-proxmox-cluster
+cd terraform-proxmox
 ```
 
 ### 2. Configure Variables
