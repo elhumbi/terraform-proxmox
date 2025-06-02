@@ -58,7 +58,7 @@ The configuration uses static MAC addresses with DHCP reservations:
 
 ### 1. Clone and Setup
 ```bash
-git clone <your-repo>
+git clone https://github.com/elhumbi/terraform-proxmox
 cd terraform-proxmox
 ```
 
