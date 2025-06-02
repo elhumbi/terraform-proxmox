@@ -1,0 +1,35 @@
+# Proxmox Configuration
+proxmox_api_url        = "https://XXX.XXX.XXX.XXX:8006/"
+proxmox_user          = "root@pam"
+proxmox_password      = "your-secure-proxmox-password"
+proxmox_tls_insecure  = true
+
+# Proxmox Storage and Network
+primary_node       = "XXX"
+storage_name       = "local-lvm"
+iso_storage_name   = "local"
+network_bridge     = "vmbr0"
+
+# Cluster Configuration
+cluster_name    = "talos-cluster"
+talos_version   = "v1.10.2"
+
+# Controller Node Resources
+controller_cpu_cores = 2
+controller_memory    = 4096  # MB
+controller_disk_size = 32    # GB
+
+# Worker Node Resources
+worker_cpu_cores = 2
+worker_memory    = 4096      # MB
+worker_disk_size = 64        # GB
+
+# Network Configuration
+metallb_ip_range = "192.168.1.180-192.168.1.190"
+
+# Optional: Override default software versions
+# cilium_version       = "1.16.5"
+# metallb_version      = "0.14.8"
+# cert_manager_version = "v1.17.2"
+# k8s_dashboard_version = "7.10.0"
+# argocd_version       = "8.0.9"
