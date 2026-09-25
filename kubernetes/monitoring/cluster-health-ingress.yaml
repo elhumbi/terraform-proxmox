@@ -1,0 +1,25 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: cluster-health
+  namespace: monitoring
+  annotations:
+    cert-manager.io/cluster-issuer: "internal-ca-issuer"
+spec:
+  ingressClassName: cilium
+  tls:
+    - hosts:
+        - cluster-health.home.local
+      secretName: cluster-health-tls
+  rules:
+    - host: cluster-health.home.local
+      http:
+        paths:
+          - path: /health
+            pathType: Prefix
+            backend:
+              service:
+                name: cluster-health
+                port:
+                  number: 80
+

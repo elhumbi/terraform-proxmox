@@ -1,0 +1,57 @@
+# Authentik 2025.10.2 - Minimales Setup mit eingebundener PostgreSQL
+
+authentik:
+  secret_key: "CHANGE_ME_openssl_rand_base64_60"
+  bootstrap_password: "CHANGE_ME"
+  postgresql:
+    password: "CHANGE_ME"
+  redis:
+    password: "CHANGE_ME"
+
+postgresql:
+  enabled: true
+  auth:
+    postgresPassword: "CHANGE_ME"
+    username: authentik
+    password: "CHANGE_ME"
+    database: authentik
+  primary:
+    persistence:
+      enabled: true
+      size: 10Gi
+      storageClassName: longhorn
+
+redis:
+  enabled: true
+  auth:
+    enabled: true
+    password: "CHANGE_ME"
+  master:
+    persistence:
+      enabled: true
+      size: 2Gi
+      storageClassName: longhorn
+
+server:
+  replicas: 1
+  ingress:
+    enabled: true
+    ingressClassName: cilium
+    annotations:
+      cert-manager.io/cluster-issuer: internal-ca-issuer
+    hosts:
+      - auth.home.local
+    paths:
+      - /
+    pathType: Prefix
+    tls:
+      - secretName: authentik-tls
+        hosts:
+          - auth.home.local
+
+worker:
+  replicas: 1
+
+serviceAccount:
+  create: true
+  name: authentik

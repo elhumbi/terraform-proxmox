@@ -101,17 +101,48 @@ kubectl get nodes
 kubectl get svc cilium-ingress -n kube-system
 ```
 
-## File Structure
+## Repository Structure
 
 ```
 .
-├── main.tf                 # Main Terraform configuration
-├── variables.tf           # Variable definitions
-├── locals.tf             # Local values and mappings
-├── terraform.tfvars.example # Example variables file
-├── kubeconfig            # Generated after deployment
-└── README.md
+├── main.tf / variables.tf / locals.tf   # Terraform: Proxmox-VMs, Talos, Cilium, MetalLB,
+├── terraform.tfvars.example             #   cert-manager, Longhorn, Dashboard, ArgoCD
+├── kubeconfig / talosconfig             # Generiert durch terraform apply (gitignored)
+│
+├── talos/
+│   ├── patches/        # Talos-Machine-Config-Patches (z.B. OIDC für den API-Server)
+│   └── exports/        # talosctl get mc Dumps der Nodes (gitignored, enthalten Secrets)
+├── certs/              # Interne CA (cert-manager) und Talos-CA (gitignored)
+│
+├── kubernetes/
+│   ├── **/sealed/      # SealedSecrets (*.sealed.yaml) – verschlüsselt, versioniert
+│   ├── infra/          # Cluster-nahe Komponenten
+│   │   ├── sealed-secrets/                # Controller-Values, pub-cert.pem, README
+│   │   ├── cilium/                        # Hubble-Values-Patch
+│   │   ├── argocd/                        # Helm-Values
+│   │   ├── kubelet-serving-cert-approver/ # CSR-Approver für Talos-Kubelets
+│   │   └── newt/                          # Pangolin/Newt-Tunnel
+│   ├── auth/           # Authentik (OIDC-Provider), Headlamp, oauth2-proxy
+│   ├── monitoring/     # Prometheus/Grafana, Loki/Tempo/Alloy, Cluster-Health, Dashboards
+│   └── apps/           # Workloads: ai-tools (LiteLLM/Ollama/Open-WebUI/LightRAG/SearXNG),
+│                       #   ragflow, sonarqube, weather-crawler, hotrod, otel-demo
+│
+└── backups/            # etcd-Snapshots, Upgrade-Logs, *.bak (gitignored)
 ```
+
+### Secrets
+
+Kubernetes-Secrets liegen als [Sealed Secrets](kubernetes/infra/sealed-secrets/README.md)
+verschlüsselt im Repo (`kubernetes/**/sealed/*.sealed.yaml`). Entschlüsseln kann sie nur der
+Controller im Cluster; der private Key ist **nicht** im Repo und muss separat gesichert werden.
+Die Manifeste referenzieren Secrets ausschliesslich per `secretKeyRef` / Secret-Volume.
+
+Helm-Values mit echten Secrets (`values.yaml` von Authentik/oauth2-proxy, `values-oidc.yaml` von
+Headlamp, Newt-Credentials) sind weiterhin gitignored. Versioniert wird nur die jeweilige
+`*.example.*`-Variante mit `CHANGE_ME`-Platzhaltern.
+
+Apply-Reihenfolge im `monitoring/`-Ordner: erst `prometheus-grafana.yaml`, dann
+`loki-tempo-alloy.yaml` (ersetzt Grafana-Datasources und die Prometheus-CRD).
 
 ## Deployed Services
 
@@ -242,7 +273,8 @@ To add more worker nodes:
 - **Network Isolation**: Configure Proxmox firewall rules as needed
 - **RBAC**: Review and customize Kubernetes RBAC policies
 - **Certificates**: Internal CA is self-signed; consider external CA for production
-- **Secrets**: Use Terraform Cloud or similar for sensitive variables
+- **Secrets**: Terraform-Variablen nur via `terraform.tfvars` (gitignored); Kubernetes-Secrets
+  ausschliesslich als Sealed Secrets, nie im Klartext in Manifesten
 - **Updates**: Regularly update Talos and Kubernetes versions
 
 ## Contributing

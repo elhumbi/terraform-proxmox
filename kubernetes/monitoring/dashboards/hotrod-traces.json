@@ -1,0 +1,125 @@
+{
+  "title": "HotROD – Trace Overview",
+  "uid": "hotrod-overview",
+  "schemaVersion": 38,
+  "version": 1,
+  "refresh": "15s",
+  "time": { "from": "now-1h", "to": "now" },
+  "tags": ["otel", "traces", "hotrod"],
+  "templating": {
+    "list": [
+      {
+        "name": "tempo",
+        "type": "datasource",
+        "pluginId": "tempo",
+        "label": "Tempo"
+      },
+      {
+        "name": "service",
+        "type": "query",
+        "label": "Service",
+        "datasource": { "type": "tempo", "uid": "${tempo}" },
+        "query": { "queryType": "serviceMap" },
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".*",
+        "refresh": 2
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Service Graph",
+      "type": "nodeGraph",
+      "gridPos": { "x": 0, "y": 0, "w": 12, "h": 10 },
+      "datasource": { "type": "tempo", "uid": "${tempo}" },
+      "targets": [
+        {
+          "queryType": "serviceMap",
+          "serviceMapQuery": "{resource.service.namespace=\"hotrod\"}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Trace Rate (traces/min)",
+      "type": "timeseries",
+      "gridPos": { "x": 12, "y": 0, "w": 12, "h": 5 },
+      "datasource": { "type": "tempo", "uid": "${tempo}" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": { "lineWidth": 2, "fillOpacity": 10 }
+        }
+      },
+      "targets": [
+        {
+          "queryType": "traceql",
+          "query": "{ resource.service.namespace = \"hotrod\" } | rate()",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Error Rate",
+      "type": "timeseries",
+      "gridPos": { "x": 12, "y": 5, "w": 12, "h": 5 },
+      "datasource": { "type": "tempo", "uid": "${tempo}" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": { "lineWidth": 2, "fillOpacity": 10 },
+          "color": { "fixedColor": "red", "mode": "fixed" }
+        }
+      },
+      "targets": [
+        {
+          "queryType": "traceql",
+          "query": "{ resource.service.namespace = \"hotrod\" && status = error } | rate()",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Recent Traces",
+      "type": "table",
+      "gridPos": { "x": 0, "y": 10, "w": 24, "h": 10 },
+      "datasource": { "type": "tempo", "uid": "${tempo}" },
+      "options": {
+        "frameType": "TRACE_RESULTS"
+      },
+      "targets": [
+        {
+          "queryType": "traceql",
+          "query": "{ resource.service.namespace = \"hotrod\" }",
+          "limit": 25,
+          "tableType": "traces",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Slow Traces (>500ms)",
+      "type": "table",
+      "gridPos": { "x": 0, "y": 20, "w": 24, "h": 8 },
+      "datasource": { "type": "tempo", "uid": "${tempo}" },
+      "options": {
+        "frameType": "TRACE_RESULTS"
+      },
+      "targets": [
+        {
+          "queryType": "traceql",
+          "query": "{ resource.service.namespace = \"hotrod\" && duration > 500ms }",
+          "limit": 20,
+          "tableType": "traces",
+          "refId": "A"
+        }
+      ]
+    }
+  ]
+}

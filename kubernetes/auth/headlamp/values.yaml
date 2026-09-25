@@ -1,0 +1,17 @@
+config:
+  inCluster: true
+
+service:
+  type: ClusterIP
+  port: 80
+
+ingress:
+  enabled: false
+
+serviceAccount:
+  create: true
+  name: headlamp-admin
+
+clusterRoleBinding:
+  create: true
+  clusterRoleName: cluster-admin

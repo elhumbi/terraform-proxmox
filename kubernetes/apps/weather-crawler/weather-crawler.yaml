@@ -1,0 +1,145 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: weather
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: weather-crawler
+  namespace: weather
+  labels:
+    app: weather-crawler
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: weather-crawler
+  template:
+    metadata:
+      labels:
+        app: weather-crawler
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: weather-crawler
+          image: cartonerito/wetter-data:latest
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: API_URL
+              value: "https://messtechnik.meteotest.ch/api_v1?action=wuerenlos_latest_data&user_id=29"
+            - name: SCRAPE_INTERVAL_MINUTES
+              value: "10"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 15
+            periodSeconds: 60
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 30
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: weather-crawler
+  namespace: weather
+  labels:
+    app: weather-crawler
+spec:
+  type: ClusterIP
+  selector:
+    app: weather-crawler
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: weather-crawler
+  namespace: weather
+  annotations:
+    cert-manager.io/cluster-issuer: internal-ca-issuer
+spec:
+  ingressClassName: cilium
+  tls:
+    - hosts:
+        - weather.home.local
+      secretName: weather-tls
+  rules:
+    - host: weather.home.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: weather-crawler
+                port:
+                  number: 8080
+
+---
+# Egress: weather-crawler darf meteotest.ch (443) und DNS erreichen
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: weather-crawler-egress
+  namespace: weather
+spec:
+  podSelector:
+    matchLabels:
+      app: weather-crawler
+  policyTypes: [Egress]
+  egress:
+    - ports:
+        - port: 443
+        - port: 53
+          protocol: UDP
+
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: weather-crawler
+  namespace: weather
+  labels:
+    app: weather-crawler
+    release: prometheus
+spec:
+  selector:
+    matchLabels:
+      app: weather-crawler
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 5m
+  namespaceSelector:
+    matchNames:
+      - weather

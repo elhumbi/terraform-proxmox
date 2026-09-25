@@ -1,0 +1,355 @@
+# ============================================================
+# SONARQUBE COMMUNITY BUILD  (sonarqube.home.local)
+# ============================================================
+# Muster wie ai-tools.yaml/ragflow.yaml: plain Manifeste, Longhorn-PVCs (1 Replika),
+# Recreate-Strategie (RWO-Volumes), Cilium-Ingress mit interner CA.
+#
+# SECRETS werden NICHT hier verwaltet, sondern als SealedSecret:
+#   kubectl apply -f kubernetes/apps/sonarqube/sealed/sonarqube-db.sealed.yaml
+# Neu erzeugen (siehe kubernetes/infra/sealed-secrets/README.md):
+#   PW=$(openssl rand -hex 24)
+#   kubectl create secret generic sonarqube-db -n sonarqube --dry-run=client -o json \
+#     --from-literal=POSTGRES_PASSWORD="$PW" --from-literal=SONAR_JDBC_PASSWORD="$PW" \
+#     | kubeseal --cert kubernetes/infra/sealed-secrets/pub-cert.pem --format yaml \
+#     > kubernetes/apps/sonarqube/sealed/sonarqube-db.sealed.yaml
+#
+# Kernel-Anforderungen der eingebetteten Elasticsearch (vm.max_map_count>=524288,
+# fs.file-max>=131072) setzt der privilegierte initContainer auf dem Node —
+# deshalb PSA "privileged" für den Namespace (wie damals bei ragflow/es01).
+# ============================================================
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: sonarqube
+  labels:
+    pod-security.kubernetes.io/enforce: privileged
+
+---
+# Die Default-StorageClass "longhorn" legt 2 Replikas an. Für "Storage flach halten"
+# (Homelab, 1 Replika) gibt es diese Klasse — cluster-weit nutzbar.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: longhorn-single
+provisioner: driver.longhorn.io
+allowVolumeExpansion: true
+reclaimPolicy: Delete
+volumeBindingMode: Immediate
+parameters:
+  numberOfReplicas: "1"
+  staleReplicaTimeout: "30"
+  fsType: ext4
+  dataLocality: best-effort   # Replika bevorzugt auf dem Node, wo der Pod läuft (lokales I/O)
+
+---
+# ============================================================
+# POSTGRESQL (SonarQube 26.8+ unterstützt PostgreSQL 15-18)
+# ============================================================
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: sonarqube-postgres-pvc
+  namespace: sonarqube
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: longhorn-single
+  resources:
+    requests:
+      storage: 5Gi
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sonarqube-postgres
+  namespace: sonarqube
+  labels:
+    app: sonarqube-postgres
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: sonarqube-postgres
+  template:
+    metadata:
+      labels:
+        app: sonarqube-postgres
+    spec:
+      # worker01 ist nach dem Wipe leer (92 G Longhorn frei, 16 G RAM ungenutzt)
+      nodeSelector:
+        kubernetes.io/hostname: talos-worker01
+      # Image-User "postgres" = 999; explizit setzen, damit der Entrypoint kein chown/gosu
+      # braucht (sonst scheitert er an capabilities.drop: ALL)
+      securityContext:
+        runAsUser: 999
+        runAsGroup: 999
+        runAsNonRoot: true
+        fsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: postgres
+          image: postgres:17.4
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 5432
+          env:
+            - name: POSTGRES_USER
+              value: sonar
+            - name: POSTGRES_DB
+              value: sonar
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: sonarqube-db
+                  key: POSTGRES_PASSWORD
+            - name: POSTGRES_INITDB_ARGS
+              value: "--encoding=UTF8 --locale=C"
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "sonar", "-d", "sonar"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          volumeMounts:
+            - name: pgdata
+              mountPath: /var/lib/postgresql/data
+      volumes:
+        - name: pgdata
+          persistentVolumeClaim:
+            claimName: sonarqube-postgres-pvc
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sonarqube-postgres
+  namespace: sonarqube
+spec:
+  selector:
+    app: sonarqube-postgres
+  ports:
+    - port: 5432
+      targetPort: 5432
+
+---
+# ============================================================
+# SONARQUBE
+# ============================================================
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: sonarqube-data-pvc
+  namespace: sonarqube
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: longhorn-single
+  resources:
+    requests:
+      storage: 10Gi
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: sonarqube-extensions-pvc
+  namespace: sonarqube
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: longhorn-single
+  resources:
+    requests:
+      storage: 2Gi
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sonarqube
+  namespace: sonarqube
+  labels:
+    app: sonarqube
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: sonarqube
+  template:
+    metadata:
+      labels:
+        app: sonarqube
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: talos-worker01
+      enableServiceLinks: false
+      securityContext:
+        runAsUser: 1000      # Image-User "sonarqube"
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        # Elasticsearch-Bootstrap-Checks: Kernel-Parameter auf dem Node setzen.
+        # Talos erlaubt das nur privilegiert (alternativ: machine.sysctls in der Talos-Config).
+        - name: sysctl
+          image: busybox:1.37
+          command:
+            - sh
+            - -c
+            - |
+              sysctl -w vm.max_map_count=524288
+              sysctl -w fs.file-max=131072
+          securityContext:
+            privileged: true
+            runAsUser: 0
+        # Postgres abwarten, sonst startet SonarQube mit DB-Fehler und braucht Minuten für den Retry
+        - name: wait-for-postgres
+          image: postgres:17.4
+          command:
+            - sh
+            - -c
+            - until pg_isready -h sonarqube-postgres -U sonar -d sonar; do echo "warte auf postgres..."; sleep 3; done
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 20m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+      containers:
+        - name: sonarqube
+          image: sonarqube:26.9.0.129388-community
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 9000
+          env:
+            - name: SONAR_JDBC_URL
+              value: "jdbc:postgresql://sonarqube-postgres.sonarqube.svc.cluster.local:5432/sonar"
+            - name: SONAR_JDBC_USERNAME
+              value: sonar
+            - name: SONAR_JDBC_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: sonarqube-db
+                  key: SONAR_JDBC_PASSWORD
+            # Heap-Aufteilung für ~4 GB Gesamtbedarf (Web + Compute Engine + Elasticsearch)
+            - name: SONAR_WEB_JAVAOPTS
+              value: "-Xmx1g -Xms512m"
+            - name: SONAR_CE_JAVAOPTS
+              value: "-Xmx1g -Xms512m"
+            - name: SONAR_SEARCH_JAVAOPTS
+              value: "-Xmx1g -Xms1g"
+            - name: TZ
+              value: Europe/Zurich
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 500m
+              memory: 3Gi
+            limits:
+              cpu: "3"
+              memory: 5Gi
+          startupProbe:
+            httpGet:
+              path: /api/system/status
+              port: http
+            periodSeconds: 10
+            failureThreshold: 60      # bis zu 10 min für Erststart + DB-Migration
+          readinessProbe:
+            httpGet:
+              path: /api/system/status
+              port: http
+            periodSeconds: 20
+          livenessProbe:
+            httpGet:
+              path: /api/system/liveness
+              port: http
+            periodSeconds: 30
+            failureThreshold: 6
+          volumeMounts:
+            - name: data
+              mountPath: /opt/sonarqube/data
+            - name: extensions
+              mountPath: /opt/sonarqube/extensions
+            - name: logs
+              mountPath: /opt/sonarqube/logs
+            - name: temp
+              mountPath: /opt/sonarqube/temp
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: sonarqube-data-pvc
+        - name: extensions
+          persistentVolumeClaim:
+            claimName: sonarqube-extensions-pvc
+        # Logs/Temp bewusst nicht persistent (Storage flach halten)
+        - name: logs
+          emptyDir: {}
+        - name: temp
+          emptyDir: {}
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sonarqube
+  namespace: sonarqube
+  labels:
+    app: sonarqube
+spec:
+  selector:
+    app: sonarqube
+  ports:
+    - name: http
+      port: 9000
+      targetPort: http
+
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: sonarqube
+  namespace: sonarqube
+  annotations:
+    cert-manager.io/cluster-issuer: internal-ca-issuer
+spec:
+  ingressClassName: cilium
+  tls:
+    - hosts:
+        - sonarqube.home.local
+      secretName: sonarqube-tls
+  rules:
+    - host: sonarqube.home.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: sonarqube
+                port:
+                  number: 9000

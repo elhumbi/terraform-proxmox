@@ -1,0 +1,9 @@
+cluster:
+  apiServer:
+    extraArgs:
+      oidc-issuer-url: "https://auth.home.local/application/o/talos-cluster-k8s"
+      oidc-client-id: "pgF3OpwtgGyCbZWH8SqsB2jikwYDWpEGQNukpQEV"
+      oidc-username-claim: "email"
+      oidc-username-prefix: "authentik:"
+      oidc-groups-claim: "groups"
+      oidc-groups-prefix: "authentik:"

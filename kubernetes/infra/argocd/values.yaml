@@ -1,0 +1,29 @@
+redis:
+  persistence:
+    enabled: true
+    storageClassName: longhorn
+    size: 5Gi
+
+repoServer:
+  volumeMounts:
+    - name: repo-storage
+      mountPath: /tmp
+  volumes:
+    - name: repo-storage
+      persistentVolumeClaim:
+        claimName: argocd-repo-storage
+
+server:
+  # kein --insecure mehr, TLS übernimmt der Ingress
+  extraArgs: []
+  ingress:
+    enabled: true
+    ingressClassName: cilium
+    hosts:
+      - argocd.home.local          # anpassen falls anderer Host
+    https: true
+    tls: true
+    annotations:
+      cert-manager.io/cluster-issuer: internal-ca-issuer
+    tlsSecretName: argocd-server-tls
+

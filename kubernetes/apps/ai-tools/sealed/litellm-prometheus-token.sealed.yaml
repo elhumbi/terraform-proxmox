@@ -1,0 +1,14 @@
+---
+apiVersion: bitnami.com/v1alpha1
+kind: SealedSecret
+metadata:
+  name: litellm-prometheus-token
+  namespace: ai-tools
+spec:
+  encryptedData:
+    token: AgAxftU81WmRDOvyty/R6nMO1PMfaSJZH75rA1ad48hPxHYWHo5Jg/vAZuVgHzIQrp+fqSgFACnDS04HqVo7HvvXPKTxJNZuLBkWCwf1yAnBQRFD0+T+z/9RtCRAaHTWekpFu1ev7BCGAz4XMTz0SnFFX2HYQa0X17od4yJ51ZEiRBMt6zxbC0ZucyRH/FOO8m3zgxig8Onfj2xiITc8z6yOaL78s4BtzkygAhfwx6ZIDMxyBvbyWf2CKe2ZtLjZxiogNFCMf28AYUyOC8CQ8sv2llrO3580FLn7vNVbnHwGOz5GGa+A0f52p34bcCg9Xb3WU5NZGXjpNYWhg0yA80dmTxeshNUXsVXekdoJy9Yp+yg8Hm7tjLXYbeYuIQKHe20Q8qdcmi2dYGyO7qR0kmuZCfPyz521D3uu5bNXTgjikIcth4+C4+bQHpY6Pv9K5enhg0WysJFZcPTsYK+az9j1oGgwqLqrQC7b/GXw55IWRwY7s1MR4saCPtmyjuZ4Yf0JRGTrAHvnzKQGG0T+MGSM+6qbwpa2t3bXz9CwtJEju4x0/oU+Hf8I0iHEm7HYszT9Jyo5k3WIeq3+69xpXqyMcW6HEqWv5BkmxmusQdGGvL7TW/eYvvahrmeB16R2A1Ie0fFDyDibkK4u7eNLq3xLJn4or2vlc/A5Sqk4rENO0mCYETaAu5fsgppks2DRRFDQFMLxhwILQZYa
+  template:
+    metadata:
+      name: litellm-prometheus-token
+      namespace: ai-tools
+    type: Opaque

@@ -1,0 +1,739 @@
+{
+  "title": "Cilium Hubble Flows",
+  "uid": "cilium-hubble-flows-homelab",
+  "schemaVersion": 38,
+  "version": 1,
+  "refresh": "30s",
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "type": "datasource",
+        "pluginId": "loki",
+        "label": "Datasource",
+        "current": {},
+        "hide": 0,
+        "refresh": 1,
+        "query": "loki"
+      },
+      {
+        "name": "source_namespace",
+        "type": "query",
+        "datasource": {
+          "type": "loki",
+          "uid": "${datasource}"
+        },
+        "query": "label_values({job=\"hubble-flows\"}, source_namespace)",
+        "label": "Source Namespace",
+        "refresh": 2,
+        "sort": 1,
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".+",
+        "current": {}
+      },
+      {
+        "name": "destination_namespace",
+        "type": "query",
+        "datasource": {
+          "type": "loki",
+          "uid": "${datasource}"
+        },
+        "query": "label_values({job=\"hubble-flows\"}, destination_namespace)",
+        "label": "Dest Namespace",
+        "refresh": 2,
+        "sort": 1,
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".+",
+        "current": {}
+      },
+      {
+        "name": "verdict",
+        "type": "custom",
+        "label": "Verdict",
+        "options": [
+          {
+            "text": "All",
+            "value": ".*",
+            "selected": true
+          },
+          {
+            "text": "FORWARDED",
+            "value": "FORWARDED",
+            "selected": false
+          },
+          {
+            "text": "DROPPED",
+            "value": "DROPPED",
+            "selected": false
+          },
+          {
+            "text": "AUDIT",
+            "value": "AUDIT",
+            "selected": false
+          },
+          {
+            "text": "ERROR",
+            "value": "ERROR",
+            "selected": false
+          }
+        ],
+        "multi": false,
+        "includeAll": true,
+        "allValue": ".*",
+        "current": {}
+      },
+      {
+        "name": "traffic_direction",
+        "type": "custom",
+        "label": "Direction",
+        "options": [
+          {
+            "text": "All",
+            "value": ".*",
+            "selected": true
+          },
+          {
+            "text": "INGRESS",
+            "value": "INGRESS",
+            "selected": false
+          },
+          {
+            "text": "EGRESS",
+            "value": "EGRESS",
+            "selected": false
+          }
+        ],
+        "multi": false,
+        "includeAll": true,
+        "allValue": ".*",
+        "current": {}
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Total Flows",
+      "type": "stat",
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 0,
+        "y": 0
+      },
+      "datasource": {
+        "type": "loki",
+        "uid": "${datasource}"
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "sum"
+          ]
+        },
+        "colorMode": "background",
+        "graphMode": "area",
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          }
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(count_over_time({job=\"hubble-flows\"} | json | flow_source_namespace=~\"$source_namespace\" | flow_destination_namespace=~\"$destination_namespace\" | flow_verdict=~\"$verdict\" | flow_traffic_direction=~\"$traffic_direction\" [$__range]))",
+          "instant": true,
+          "legendFormat": "Total",
+          "queryType": "instant"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Dropped Flows",
+      "type": "stat",
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 4,
+        "y": 0
+      },
+      "datasource": {
+        "type": "loki",
+        "uid": "${datasource}"
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "sum"
+          ]
+        },
+        "colorMode": "background",
+        "graphMode": "area",
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(count_over_time({job=\"hubble-flows\"} | json | flow_verdict=\"DROPPED\" [$__range]))",
+          "instant": true,
+          "legendFormat": "Dropped",
+          "queryType": "instant"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Flows by Verdict",
+      "type": "piechart",
+      "gridPos": {
+        "h": 8,
+        "w": 7,
+        "x": 8,
+        "y": 0
+      },
+      "datasource": {
+        "type": "loki",
+        "uid": "${datasource}"
+      },
+      "options": {
+        "pieType": "pie",
+        "legend": {
+          "displayMode": "table",
+          "placement": "right"
+        }
+      },
+      "fieldConfig": {
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "FORWARDED"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "green",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "DROPPED"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "red",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "AUDIT"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "orange",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "ERROR"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "dark-red",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "${datasource}"
+          },
+          "expr": "sum by (flow_verdict) (count_over_time({job=\"hubble-flows\"} | json | flow_source_namespace=~\"$source_namespace\" | flow_destination_namespace=~\"$destination_namespace\" | flow_verdict=~\"$verdict\" | flow_traffic_direction=~\"$traffic_direction\" [$__range]))",
+          "instant": true,
+          "legendFormat": "{{flow_verdict}}",
+          "queryType": "instant"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Flows by Direction",
+      "type": "piechart",
+      "gridPos": {
+        "h": 8,
+        "w": 5,
+        "x": 15,
+        "y": 0
+      },
+      "datasource": {
+        "type": "loki",
+        "uid": "${datasource}"
+      },
+      "options": {
+        "pieType": "donut",
+        "legend": {
+          "displayMode": "table",
+          "placement": "right"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "${datasource}"
+          },
+          "expr": "sum by (flow_traffic_direction) (count_over_time({job=\"hubble-flows\"} | json | flow_source_namespace=~\"$source_namespace\" | flow_destination_namespace=~\"$destination_namespace\" | flow_verdict=~\"$verdict\" | flow_traffic_direction=~\"$traffic_direction\" [$__range]))",
+          "instant": true,
+          "legendFormat": "{{flow_traffic_direction}}",
+          "queryType": "instant"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Top Source Namespaces",
+      "type": "piechart",
+      "gridPos": {
+        "h": 8,
+        "w": 4,
+        "x": 20,
+        "y": 0
+      },
+      "datasource": {
+        "type": "loki",
+        "uid": "${datasource}"
+      },
+      "options": {
+        "pieType": "donut",
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "${datasource}"
+          },
+          "expr": "sum by (flow_source_namespace) (count_over_time({job=\"hubble-flows\"} | json | flow_source_namespace=~\"$source_namespace\" | flow_destination_namespace=~\"$destination_namespace\" | flow_verdict=~\"$verdict\" | flow_traffic_direction=~\"$traffic_direction\" [$__range]))",
+          "instant": true,
+          "legendFormat": "{{flow_source_namespace}}",
+          "queryType": "instant"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Flows over Time by Verdict",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 8
+      },
+      "datasource": {
+        "type": "loki",
+        "uid": "${datasource}"
+      },
+      "options": {
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "stacking": {
+              "mode": "normal"
+            },
+            "fillOpacity": 20
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "FORWARDED"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "green",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "DROPPED"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "red",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "AUDIT"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "orange",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "${datasource}"
+          },
+          "expr": "sum by (flow_verdict) (count_over_time({job=\"hubble-flows\"} | json | flow_source_namespace=~\"$source_namespace\" | flow_destination_namespace=~\"$destination_namespace\" | flow_verdict=~\"$verdict\" | flow_traffic_direction=~\"$traffic_direction\" [$__interval]))",
+          "legendFormat": "{{flow_verdict}}"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "Dropped Flows over Time by Source Namespace",
+      "type": "timeseries",
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 16
+      },
+      "datasource": {
+        "type": "loki",
+        "uid": "${datasource}"
+      },
+      "options": {
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "stacking": {
+              "mode": "normal"
+            },
+            "fillOpacity": 20
+          }
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "${datasource}"
+          },
+          "expr": "sum by (flow_source_namespace) (count_over_time({job=\"hubble-flows\"} | json | flow_source_namespace=~\"$source_namespace\" | flow_destination_namespace=~\"$destination_namespace\" | flow_verdict=~\"$verdict\" | flow_traffic_direction=~\"$traffic_direction\" [$__interval]))",
+          "legendFormat": "{{flow_source_namespace}}"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "title": "Flow History",
+      "type": "table",
+      "gridPos": {
+        "h": 12,
+        "w": 24,
+        "x": 0,
+        "y": 24
+      },
+      "datasource": {
+        "type": "loki",
+        "uid": "${datasource}"
+      },
+      "options": {
+        "sortBy": [
+          {
+            "desc": true,
+            "displayName": "Time"
+          }
+        ]
+      },
+      "fieldConfig": {
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Time"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 180
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "flow_verdict"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 120
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "FORWARDED": {
+                        "color": "green",
+                        "index": 0
+                      },
+                      "DROPPED": {
+                        "color": "red",
+                        "index": 1
+                      },
+                      "AUDIT": {
+                        "color": "orange",
+                        "index": 2
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "custom.displayMode",
+                "value": "color-background"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "source_namespace"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 150
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "destination_namespace"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 160
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "source_pod"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 200
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "dest_pod"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 200
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "drop_reason"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 200
+              }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "${datasource}"
+          },
+          "expr": "{job=\"hubble-flows\"} | json | flow_source_namespace=~\"$source_namespace\" | flow_destination_namespace=~\"$destination_namespace\" | flow_verdict=~\"$verdict\" | flow_traffic_direction=~\"$traffic_direction\"",
+          "legendFormat": ""
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "id": true,
+              "tsNs": true,
+              "cluster": true,
+              "job": true,
+              "node": true
+            },
+            "renameByName": {
+              "flow_source_namespace": "Source NS",
+              "flow_destination_namespace": "Dest NS",
+              "flow_source_pod": "Source Pod",
+              "flow_dest_pod": "Dest Pod",
+              "flow_traffic_direction": "Direction",
+              "flow_drop_reason": "Drop Reason"
+            },
+            "indexByName": {
+              "Time": 0,
+              "verdict": 1,
+              "Direction": 2,
+              "Source NS": 3,
+              "Source Pod": 4,
+              "Dest NS": 5,
+              "Dest Pod": 6,
+              "Drop Reason": 7
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "title": "Raw Flows",
+      "type": "logs",
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 36
+      },
+      "datasource": {
+        "type": "loki",
+        "uid": "${datasource}"
+      },
+      "options": {
+        "showTime": true,
+        "showLabels": false,
+        "showCommonLabels": false,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": true,
+        "enableLogDetails": true,
+        "dedupStrategy": "none",
+        "sortOrder": "Descending"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "${datasource}"
+          },
+          "expr": "{job=\"hubble-flows\"} | json | flow_source_namespace=~\"$source_namespace\" | flow_destination_namespace=~\"$destination_namespace\" | flow_verdict=~\"$verdict\" | flow_traffic_direction=~\"$traffic_direction\"",
+          "legendFormat": ""
+        }
+      ]
+    }
+  ]
+}

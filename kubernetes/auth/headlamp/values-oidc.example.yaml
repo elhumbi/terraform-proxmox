@@ -1,0 +1,17 @@
+config:
+  inCluster: true
+  oidc:
+    enabled: true
+    issuerURL: "https://auth.home.local/application/o/headlamp/"
+    clientID: "CHANGE_ME"
+    clientSecret: "CHANGE_ME"
+    scopes: "openid,profile,email,groups"
+    useAccessToken: false
+
+podSecurityContext:
+  runAsNonRoot: false
+
+containerSecurityContext: {}
+
+args:
+  - "--oidc-skip-tls-verify"

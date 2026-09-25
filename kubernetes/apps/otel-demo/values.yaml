@@ -1,0 +1,67 @@
+# OpenTelemetry Demo ("Astronomy Shop")
+# Bundled Jaeger/Prometheus/Grafana deaktiviert — nutzt bestehenden Stack
+# Helm: helm repo add open-telemetry https://open-telemetry.github.io/opentelemetry-helm-charts
+# Deploy: helm upgrade --install otel-demo open-telemetry/opentelemetry-demo \
+#           --namespace otel-demo --create-namespace \
+#           -f kubernetes/apps/otel-demo/values.yaml
+
+# Bundled Komponenten deaktivieren
+jaeger:
+  enabled: false
+
+prometheus:
+  enabled: false
+
+grafana:
+  enabled: false
+
+# Demo-Services: alle aktiviert (default)
+# Reduzierte Ressourcen für Homelab
+default:
+  env:
+    - name: OTEL_COLLECTOR_NAME
+      value: "otel-demo-otelcol.otel-demo.svc.cluster.local"
+    - name: OTEL_EXPORTER_OTLP_ENDPOINT
+      value: "http://$(OTEL_COLLECTOR_NAME):4317"
+    - name: OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE
+      value: "cumulative"
+
+# Demo-eigener Collector: sammelt von allen Services, leitet weiter an alloy-collector
+opentelemetry-collector:
+  enabled: true
+  config:
+    exporters:
+      otlp/alloy:
+        endpoint: alloy-collector.monitoring.svc.cluster.local:4317
+        tls:
+          insecure: true
+
+    connectors:
+      spanmetrics:
+        histogram:
+          explicit:
+            buckets: [1ms, 5ms, 10ms, 25ms, 50ms, 100ms, 250ms, 500ms, 1s, 2s]
+        dimensions:
+          - name: http.method
+          - name: http.status_code
+          - name: http.route
+          - name: rpc.method
+          - name: rpc.service
+        exemplars:
+          enabled: true
+        namespace: otel_demo
+
+    service:
+      pipelines:
+        traces:
+          receivers: [otlp]
+          processors: [memory_limiter, batch]
+          exporters: [otlp/alloy, spanmetrics]
+        metrics:
+          receivers: [otlp, spanmetrics]
+          processors: [memory_limiter, batch]
+          exporters: [otlp/alloy]
+        logs:
+          receivers: [otlp]
+          processors: [memory_limiter, batch]
+          exporters: [otlp/alloy]

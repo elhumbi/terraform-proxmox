@@ -1,0 +1,23 @@
+# Sealed Secrets Controller (bitnami-labs/sealed-secrets)
+# Chart: oci://registry-1.docker.io/bitnamicharts/sealed-secrets
+# Install: siehe README.md in diesem Ordner
+fullnameOverride: sealed-secrets-controller
+namespace: kube-system
+
+# Private Key bleibt im Cluster (Secret sealed-secrets-key in kube-system).
+# Backup des Keys ist Pflicht, sonst sind alle *.sealed.yaml nach
+# Cluster-Neuaufbau wertlos (siehe README).
+secretName: sealed-secrets-key
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+metrics:
+  serviceMonitor:
+    enabled: true
+    namespace: kube-system

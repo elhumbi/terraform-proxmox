@@ -1,0 +1,3 @@
+PANGOLIN_ENDPOINT=https://pangolin.example.com
+NEWT_ID=CHANGE_ME
+NEWT_SECRET=CHANGE_ME

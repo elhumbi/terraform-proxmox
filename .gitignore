@@ -1,8 +1,11 @@
+# ---------------------------------------------------------------
 # Terraform
+# ---------------------------------------------------------------
 *.tfstate
 *.tfstate.*
 *.tfvars
 *.tfvars.json
+!terraform.tfvars.example
 .terraform/
 .terraform.lock.hcl
 crash.log
@@ -13,38 +16,66 @@ override.tf.json
 *_override.tf.json
 .terraformrc
 terraform.rc
-
-# Terraform plan files
 *.tfplan
 *.tfplan.*
-
-# Terraform backup files
 *.backup
 
-# Kubernetes
+# ---------------------------------------------------------------
+# Generierte Cluster-Zugangsdaten (Terraform-Output)
+# ---------------------------------------------------------------
 kubeconfig
 kubeconfig.*
 *.kubeconfig
-config
+talosconfig
 .kube/
-.kubectl_aliases
 
-# Helm
-.helm/
+# ---------------------------------------------------------------
+# Talos-Exporte (enthalten Cluster-Secrets/CA-Keys) und Zertifikate
+# ---------------------------------------------------------------
+talos/exports/
+certs/
 
-# General sensitive files
+# ---------------------------------------------------------------
+# Dateien mit echten Secrets – nur die *.example.* Varianten werden
+# versioniert. Neue Secret-Dateien hier explizit eintragen.
+# ---------------------------------------------------------------
+kubernetes/auth/authentik/values.yaml
+kubernetes/auth/headlamp/values-oidc.yaml
+kubernetes/auth/oauth2-proxy/values.yaml
+kubernetes/infra/newt/newt-with-secret.yaml
+kubernetes/infra/newt/credentials.md
 *.pem
 *.key
 *.crt
 *.p12
 *.pfx
-secrets.yaml
-secrets.yml
 *secret*
 *password*
 *token*
+!*.example.*
+# Sealed Secrets (kubeseal, nur mit Cluster-Private-Key entschlüsselbar) sind
+# bewusst versioniert – ebenso das öffentliche Zertifikat des Controllers.
+!*.sealed.yaml
+!kubernetes/infra/sealed-secrets/
+!kubernetes/infra/sealed-secrets/pub-cert.pem
 
-# OS generated files
+# ---------------------------------------------------------------
+# Backups, lokale Tools, Temporäres
+# ---------------------------------------------------------------
+backups/
+.bin/
+*.bak
+*.bak-*
+*.tmp
+*.temp
+.tmp/
+.temp/
+*.log
+logs/
+
+# ---------------------------------------------------------------
+# OS / IDE
+# ---------------------------------------------------------------
 .DS_Store
 .DS_Store?
 ._*
@@ -52,20 +83,8 @@ secrets.yml
 .Trashes
 ehthumbs.db
 Thumbs.db
-
-# IDE files
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
-
-# Logs
-*.log
-logs/
-
-# Temporary files
-*.tmp
-*.temp
-.tmp/
-.temp/

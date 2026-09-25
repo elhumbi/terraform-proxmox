@@ -1,0 +1,141 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: newt
+  namespace: pangolin
+  labels:
+    app: newt
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: newt
+  template:
+    metadata:
+      labels:
+        app: newt
+    spec:
+      nodeSelector:
+        node-role.kubernetes.io/worker: ""
+      containers:
+        - name: newt
+          image: fosrl/newt:latest
+          imagePullPolicy: Always
+          env:
+            - name: NEWT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: newt-credentials
+                  key: NEWT_ID
+            - name: NEWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: newt-credentials
+                  key: NEWT_SECRET
+            - name: PANGOLIN_ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  name: newt-credentials
+                  key: PANGOLIN_ENDPOINT
+          securityContext:
+            capabilities:
+              add:
+                - NET_ADMIN
+              drop:
+                - ALL
+            allowPrivilegeEscalation: false
+            privileged: false
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          livenessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - "pgrep newt"
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            failureThreshold: 3
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: newt-egress
+  namespace: pangolin
+spec:
+  podSelector:
+    matchLabels:
+      app: newt
+  policyTypes:
+    - Egress
+    - Ingress
+  egress:
+    - ports:
+        - port: 51820
+          protocol: UDP
+        - port: 21820
+          protocol: UDP
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    - ports:
+        - port: 443
+          protocol: TCP
+  ingress:
+    - {}
+
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: newt-policy
+  namespace: newt
+spec:
+  endpointSelector:
+    matchLabels:
+      app.kubernetes.io/component: newt
+      app.kubernetes.io/instance: my-newt
+  ingress: []
+  egress:
+    - toCIDR:
+        - 46.225.217.163/32
+      toPorts:
+        - ports:
+            - port: "443"
+              protocol: TCP
+            - port: "51820"
+              protocol: UDP
+            - port: "21820"
+              protocol: UDP
+    - toEndpoints:
+        - matchLabels:
+            k8s-app: kube-dns
+            k8s:io.kubernetes.pod.namespace: kube-system
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: UDP
+            - port: "53"
+              protocol: TCP
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: monitoring
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: ai-tools
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: authentik
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: default
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: weather

@@ -1,0 +1,22 @@
+service:
+  type: ClusterIP
+  portNumber: 4180  # Nicht mehr "port", sondern "portNumber"
+  appProtocol: http
+
+config:
+  clientID: "CHANGE_ME"
+  clientSecret: "CHANGE_ME"
+  cookieSecret: "CHANGE_ME_openssl_rand_base64_32"
+  configFile: |-
+    provider = "oidc"
+    oidc_issuer_url = "https://auth.home.local/application/o/headlamp/"
+    upstreams = ["http://headlamp:4466"]
+    email_domains = ["*"]
+    cookie_secure = false
+    ssl_insecure_skip_verify = true
+
+ingress:
+  enabled: true
+  ingressClassName: cilium
+  hosts:
+    - "headlamp.home.local"

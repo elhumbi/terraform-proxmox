@@ -1,0 +1,131 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: monitoring
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cluster-health-script
+  namespace: monitoring
+data:
+  app.py: |
+    import os
+    import requests
+    from flask import Flask, jsonify
+
+    app = Flask(__name__)
+
+    K8S_API = os.environ.get("K8S_API", "https://kubernetes.default.svc:443/readyz")
+    CA_CERT = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
+    TOKEN_FILE = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+
+    def check_apiserver():
+      try:
+        with open(TOKEN_FILE, "r") as f:
+          token = f.read().strip()
+        headers = {"Authorization": f"Bearer {token}"}
+        r = requests.get(K8S_API, headers=headers, verify=CA_CERT, timeout=3)
+        return r.status_code == 200
+      except Exception:
+        return False
+
+    @app.route("/health", methods=["GET"])
+    def health():
+      if check_apiserver():
+        return jsonify({"status": "ok"}), 200
+      return jsonify({"status": "error"}), 503
+
+    if __name__ == "__main__":
+      app.run(host="0.0.0.0", port=8080)
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: cluster-health
+  namespace: monitoring
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cluster-health-read-apiserver
+rules:
+  - nonResourceURLs:
+      - "/readyz"
+    verbs:
+      - "get"
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: cluster-health-read-apiserver
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-health-read-apiserver
+subjects:
+  - kind: ServiceAccount
+    name: cluster-health
+    namespace: monitoring
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cluster-health
+  namespace: monitoring
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: cluster-health
+  template:
+    metadata:
+      labels:
+        app: cluster-health
+    spec:
+      serviceAccountName: cluster-health
+      containers:
+        - name: cluster-health
+          image: python:3.12-alpine
+          imagePullPolicy: IfNotPresent
+          command: ["python", "/app/app.py"]
+          env:
+            - name: K8S_API
+              value: "https://kubernetes.default.svc:443/readyz"
+          ports:
+            - containerPort: 8080
+              name: http
+          volumeMounts:
+            - name: script
+              mountPath: /app
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+      volumes:
+        - name: script
+          configMap:
+            name: cluster-health-script
+            defaultMode: 0755
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cluster-health
+  namespace: monitoring
+spec:
+  selector:
+    app: cluster-health
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+

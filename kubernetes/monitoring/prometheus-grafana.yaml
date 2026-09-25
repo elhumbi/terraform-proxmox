@@ -1,0 +1,742 @@
+---
+# ============================================================
+# NAMESPACE
+# ============================================================
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: monitoring
+  labels:
+    pod-security.kubernetes.io/enforce: privileged
+
+---
+# ============================================================
+# GRAFANA SECRET
+# Wird NICHT hier verwaltet, sondern als SealedSecret:
+#   kubectl apply -f kubernetes/monitoring/sealed/grafana-admin-secret.sealed.yaml
+# Neu versiegeln: siehe kubernetes/infra/sealed-secrets/README.md
+# ============================================================
+# ============================================================
+# GRAFANA CONFIGMAP - Datasource Prometheus
+# ============================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-datasources
+  namespace: monitoring
+  labels:
+    grafana_datasource: "1"
+data:
+  prometheus.yaml: |
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        type: prometheus
+        url: http://prometheus-operated.monitoring.svc.cluster.local:9090
+        access: proxy
+        isDefault: true
+        editable: false
+
+---
+# ============================================================
+# GRAFANA PVC
+# ============================================================
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: grafana-pvc
+  namespace: monitoring
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+  storageClassName: longhorn
+
+---
+# ============================================================
+# GRAFANA DEPLOYMENT
+# ============================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  namespace: monitoring
+  labels:
+    app: grafana
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: grafana
+  template:
+    metadata:
+      labels:
+        app: grafana
+    spec:
+      securityContext:
+        fsGroup: 472
+        runAsUser: 472
+        runAsGroup: 472
+      containers:
+        - name: grafana
+          image: grafana/grafana:12.4.2
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 3000
+              name: http
+          env:
+            - name: GF_SECURITY_ADMIN_USER
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-admin-secret
+                  key: admin-user
+            - name: GF_SECURITY_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-admin-secret
+                  key: admin-password
+            - name: GF_PATHS_DATA
+              value: /var/lib/grafana
+            - name: GF_PATHS_PROVISIONING
+              value: /etc/grafana/provisioning
+            - name: GF_SERVER_ROOT_URL
+              value: "https://grafana.home.local"
+            - name: GF_ANALYTICS_REPORTING_ENABLED
+              value: "false"
+            - name: GF_ANALYTICS_CHECK_FOR_UPDATES
+              value: "false"
+          volumeMounts:
+            - name: grafana-data
+              mountPath: /var/lib/grafana
+            - name: grafana-datasources
+              mountPath: /etc/grafana/provisioning/datasources
+              readOnly: true
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: 3000
+            initialDelaySeconds: 30
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 3000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+      volumes:
+        - name: grafana-data
+          persistentVolumeClaim:
+            claimName: grafana-pvc
+        - name: grafana-datasources
+          configMap:
+            name: grafana-datasources
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+  namespace: monitoring
+  labels:
+    app: grafana
+spec:
+  type: ClusterIP
+  selector:
+    app: grafana
+  ports:
+    - name: http
+      port: 3000
+      targetPort: 3000
+
+---
+# ============================================================
+# GRAFANA INGRESS
+# ============================================================
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: grafana-ingress
+  namespace: monitoring
+  annotations:
+    cert-manager.io/cluster-issuer: "internal-ca-issuer"
+spec:
+  ingressClassName: cilium
+  tls:
+    - hosts:
+        - grafana.home.local
+      secretName: grafana-home-local-tls
+  rules:
+    - host: grafana.home.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: grafana
+                port:
+                  number: 3000
+
+---
+# ============================================================
+# PROMETHEUS OPERATOR
+# Managed via kubectl apply --server-side
+# Deployed separately - see migration notes below
+# ============================================================
+
+---
+# ============================================================
+# PROMETHEUS RBAC
+# Der Operator braucht erweiterte Rechte für CRD-Zugriff
+# ============================================================
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: prometheus
+  namespace: monitoring
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: prometheus
+rules:
+  - apiGroups: [""]
+    resources:
+      - nodes
+      - nodes/proxy
+      - nodes/metrics
+      - services
+      - endpoints
+      - pods
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["extensions", "networking.k8s.io"]
+    resources:
+      - ingresses
+    verbs: ["get", "list", "watch"]
+  - nonResourceURLs: ["/metrics", "/metrics/cadvisor"]
+    verbs: ["get"]
+  # Zusätzlich für Prometheus Operator CRD-Discovery
+  - apiGroups: ["monitoring.coreos.com"]
+    resources:
+      - servicemonitors
+      - podmonitors
+      - prometheusrules
+      - probes
+    verbs: ["get", "list", "watch"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: prometheus
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: prometheus
+subjects:
+  - kind: ServiceAccount
+    name: prometheus
+    namespace: monitoring
+
+---
+# ============================================================
+# ADDITIONAL SCRAPE CONFIGS SECRET
+# Bestehende static/kubernetes_sd scrape_configs die nicht
+# per ServiceMonitor abgedeckt werden
+# ============================================================
+apiVersion: v1
+kind: Secret
+metadata:
+  name: prometheus-additional-scrape-configs
+  namespace: monitoring
+type: Opaque
+stringData:
+  scrape_configs.yaml: |
+    # Kubernetes API Server
+    - job_name: kubernetes-apiservers
+      kubernetes_sd_configs:
+        - role: endpoints
+      scheme: https
+      tls_config:
+        ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+        insecure_skip_verify: true
+      bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+      relabel_configs:
+        - source_labels: [__meta_kubernetes_namespace, __meta_kubernetes_service_name, __meta_kubernetes_endpoint_port_name]
+          action: keep
+          regex: default;kubernetes;https
+
+    # Kubernetes Nodes (kubelet)
+    - job_name: kubernetes-nodes
+      kubernetes_sd_configs:
+        - role: node
+      scheme: https
+      tls_config:
+        ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+        insecure_skip_verify: true
+      bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+      relabel_configs:
+        - action: labelmap
+          regex: __meta_kubernetes_node_label_(.+)
+
+    # cAdvisor (Container Metriken)
+    - job_name: kubernetes-cadvisor
+      kubernetes_sd_configs:
+        - role: node
+      scheme: https
+      metrics_path: /metrics/cadvisor
+      tls_config:
+        ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+        insecure_skip_verify: true
+      bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+      relabel_configs:
+        - action: labelmap
+          regex: __meta_kubernetes_node_label_(.+)
+
+    # Pods mit annotation prometheus.io/scrape: "true"
+    - job_name: kubernetes-pods
+      kubernetes_sd_configs:
+        - role: pod
+      relabel_configs:
+        - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+          action: keep
+          regex: "true"
+        - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+          action: replace
+          target_label: __metrics_path__
+          regex: (.+)
+        - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+          action: replace
+          regex: ([^:]+)(?::\d+)?;(\d+)
+          replacement: $1:$2
+          target_label: __address__
+        - action: labelmap
+          regex: __meta_kubernetes_pod_label_(.+)
+        - source_labels: [__meta_kubernetes_namespace]
+          target_label: namespace
+        - source_labels: [__meta_kubernetes_pod_name]
+          target_label: pod
+
+---
+# ============================================================
+# PROMETHEUS CRD (Prometheus Operator)
+# Ersetzt das bisherige Deployment + ConfigMap
+# ============================================================
+apiVersion: monitoring.coreos.com/v1
+kind: Prometheus
+metadata:
+  name: prometheus
+  namespace: monitoring
+  labels:
+    app: prometheus
+spec:
+  serviceAccountName: prometheus
+  # Alle ServiceMonitors im Cluster aufnehmen (kein Label-Filter)
+  serviceMonitorSelector: {}
+  serviceMonitorNamespaceSelector: {}
+  # Alle PodMonitors im Cluster aufnehmen
+  podMonitorSelector: {}
+  podMonitorNamespaceSelector: {}
+  # Alle PrometheusRules im Cluster aufnehmen
+  ruleSelector: {}
+  ruleNamespaceSelector: {}
+  # Bestehende scrape_configs als additionalScrapeConfigs
+  additionalScrapeConfigs:
+    name: prometheus-additional-scrape-configs
+    key: scrape_configs.yaml
+  externalLabels:
+    cluster: homelab
+    environment: home
+  # Retention identisch zum bisherigen Setup
+  retention: 15d
+  retentionSize: 8GB
+  # Prometheus selbst scrapt sich via ServiceMonitor (siehe unten)
+  # Storage via Longhorn
+  storage:
+    volumeClaimTemplate:
+      spec:
+        storageClassName: longhorn
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 10Gi
+  resources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+  securityContext:
+    fsGroup: 65534
+    runAsUser: 65534
+    runAsNonRoot: true
+  # Prometheus v3.x - aktuelle stabile Version
+  image: quay.io/prometheus/prometheus:v3.8.0
+
+---
+# ============================================================
+# PROMETHEUS SERVICE
+# Der Operator erstellt "prometheus-operated" automatisch.
+# Dieser Service ist für Ingress/manuelle Zugriffe.
+# ============================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus
+  namespace: monitoring
+  labels:
+    app: prometheus
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: prometheus
+    prometheus: prometheus
+  ports:
+    - name: http
+      port: 9090
+      targetPort: 9090
+
+---
+# ============================================================
+# KUBE-STATE-METRICS RBAC
+# ============================================================
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kube-state-metrics
+  namespace: monitoring
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kube-state-metrics
+rules:
+  - apiGroups: [""]
+    resources:
+      - configmaps
+      - secrets
+      - nodes
+      - pods
+      - services
+      - serviceaccounts
+      - resourcequotas
+      - replicationcontrollers
+      - limitranges
+      - persistentvolumeclaims
+      - persistentvolumes
+      - namespaces
+      - endpoints
+    verbs: ["list", "watch"]
+  - apiGroups: ["apps"]
+    resources:
+      - statefulsets
+      - daemonsets
+      - deployments
+      - replicasets
+    verbs: ["list", "watch"]
+  - apiGroups: ["batch"]
+    resources:
+      - cronjobs
+      - jobs
+    verbs: ["list", "watch"]
+  - apiGroups: ["autoscaling"]
+    resources:
+      - horizontalpodautoscalers
+    verbs: ["list", "watch"]
+  - apiGroups: ["networking.k8s.io"]
+    resources:
+      - ingresses
+    verbs: ["list", "watch"]
+  - apiGroups: ["storage.k8s.io"]
+    resources:
+      - storageclasses
+      - volumeattachments
+    verbs: ["list", "watch"]
+  - apiGroups: ["policy"]
+    resources:
+      - poddisruptionbudgets
+    verbs: ["list", "watch"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kube-state-metrics
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kube-state-metrics
+subjects:
+  - kind: ServiceAccount
+    name: kube-state-metrics
+    namespace: monitoring
+
+---
+# ============================================================
+# KUBE-STATE-METRICS DEPLOYMENT
+# ============================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kube-state-metrics
+  namespace: monitoring
+  labels:
+    app: kube-state-metrics
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kube-state-metrics
+  template:
+    metadata:
+      labels:
+        app: kube-state-metrics
+    spec:
+      serviceAccountName: kube-state-metrics
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: kube-state-metrics
+          image: registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.18.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+              name: http-metrics
+            - containerPort: 8081
+              name: telemetry
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: 8080
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            failureThreshold: 5
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8081
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            failureThreshold: 5
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kube-state-metrics
+  namespace: monitoring
+  labels:
+    app: kube-state-metrics
+spec:
+  type: ClusterIP
+  selector:
+    app: kube-state-metrics
+  ports:
+    - name: http-metrics
+      port: 8080
+      targetPort: 8080
+    - name: telemetry
+      port: 8081
+      targetPort: 8081
+
+---
+# ============================================================
+# NODE-EXPORTER DAEMONSET
+# Läuft auf jedem Node - braucht hostNetwork + privileged
+# ============================================================
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: node-exporter
+  namespace: monitoring
+  labels:
+    app: node-exporter
+spec:
+  selector:
+    matchLabels:
+      app: node-exporter
+  template:
+    metadata:
+      labels:
+        app: node-exporter
+    spec:
+      hostNetwork: true
+      hostPID: true
+      tolerations:
+        - operator: Exists
+      containers:
+        - name: node-exporter
+          image: prom/node-exporter:v1.10.2
+          imagePullPolicy: IfNotPresent
+          args:
+            - "--path.sysfs=/host/sys"
+            - "--path.rootfs=/host/root"
+            - "--no-collector.wifi"
+            - "--no-collector.hwmon"
+            - "--collector.filesystem.mount-points-exclude=^/(dev|proc|sys|var/lib/docker/.+|var/lib/kubelet/pods/.+)($|/)"
+          ports:
+            - containerPort: 9100
+              name: metrics
+              hostPort: 9100
+          volumeMounts:
+            - name: sys
+              mountPath: /host/sys
+              readOnly: true
+              mountPropagation: HostToContainer
+            - name: root
+              mountPath: /host/root
+              readOnly: true
+              mountPropagation: HostToContainer
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+              add: ["SYS_TIME"]
+            readOnlyRootFilesystem: true
+          resources:
+            requests:
+              cpu: 50m
+              memory: 32Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+      volumes:
+        - name: sys
+          hostPath:
+            path: /sys
+        - name: root
+          hostPath:
+            path: /
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: node-exporter
+  namespace: monitoring
+  labels:
+    app: node-exporter
+spec:
+  type: ClusterIP
+  clusterIP: None
+  selector:
+    app: node-exporter
+  ports:
+    - name: metrics
+      port: 9100
+      targetPort: 9100
+
+---
+# ============================================================
+# SERVICEMONITOR: kube-state-metrics
+# Ersetzt den statischen scrape_config job
+# ============================================================
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: kube-state-metrics
+  namespace: monitoring
+spec:
+  selector:
+    matchLabels:
+      app: kube-state-metrics
+  endpoints:
+    - port: http-metrics
+      interval: 30s
+  namespaceSelector:
+    matchNames:
+      - monitoring
+
+---
+# ============================================================
+# SERVICEMONITOR: node-exporter
+# Ersetzt den kubernetes_sd scrape_config job
+# ============================================================
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: node-exporter
+  namespace: monitoring
+spec:
+  selector:
+    matchLabels:
+      app: node-exporter
+  endpoints:
+    - port: metrics
+      interval: 30s
+  namespaceSelector:
+    matchNames:
+      - monitoring
+
+---
+# ============================================================
+# SERVICEMONITOR: prometheus selbst
+# ============================================================
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: prometheus
+  namespace: monitoring
+spec:
+  selector:
+    matchLabels:
+      app: prometheus
+  endpoints:
+    - port: http
+      interval: 30s
+  namespaceSelector:
+    matchNames:
+      - monitoring
+---
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: prometheus-ingress
+  namespace: monitoring
+  annotations:
+    cert-manager.io/cluster-issuer: "internal-ca-issuer"
+spec:
+  ingressClassName: cilium
+  tls:
+    - hosts:
+        - prometheus.home.local
+      secretName: prometheus-home-local-tls
+  rules:
+    - host: prometheus.home.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: prometheus-operated
+                port:
+                  number: 9090

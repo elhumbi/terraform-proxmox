@@ -1,0 +1,542 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ragflow
+  labels:
+    pod-security.kubernetes.io/enforce: privileged
+
+---
+# ============================================================
+# SECRETS (ragflow-secrets, ragflow-config) werden als SealedSecrets verwaltet:
+#   kubectl apply -f kubernetes/apps/ragflow/sealed/
+# ragflow-secrets: mysql-root-password, minio-user, minio-password,
+#                  es-password, redis-password, openai-api-key (LiteLLM master key)
+# ragflow-config:  service_conf.yaml (enthält dieselben Passwörter)
+# ============================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ragflow-nginx-config
+  namespace: ragflow
+data:
+  nginx.conf: |
+    user www-data;
+    worker_processes auto;
+    pid /run/nginx.pid;
+    include /etc/nginx/modules-enabled/*.conf;
+
+    events {
+        worker_connections 1024;
+    }
+
+    http {
+        sendfile on;
+        tcp_nopush on;
+        types_hash_max_size 2048;
+        client_max_body_size 128M;
+
+        include /etc/nginx/mime.types;
+        default_type application/octet-stream;
+
+        ssl_protocols TLSv1.2 TLSv1.3;
+        ssl_prefer_server_ciphers on;
+
+        access_log /var/log/nginx/access.log;
+        error_log /var/log/nginx/error.log;
+
+        gzip on;
+
+        include /etc/nginx/conf.d/*.conf;
+    }
+  proxy.conf: |
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+    proxy_read_timeout 3600s;
+    proxy_send_timeout 3600s;
+    proxy_buffering off;
+    proxy_buffer_size 1024k;
+    proxy_buffers 16 1024k;
+    proxy_busy_buffers_size 2048k;
+  ragflow.conf: |
+    server {
+        listen 80;
+        server_name _;
+        root /ragflow/web/dist;
+        client_max_body_size 128M;
+
+        gzip on;
+        gzip_min_length 1k;
+        gzip_comp_level 9;
+        gzip_types text/plain text/css application/json application/javascript text/xml application/xml application/xml+rss text/javascript image/svg+xml;
+        gzip_disable "MSIE [1-6]\.";
+
+        location ~ ^/api/v1/admin {
+            proxy_pass http://localhost:9381;
+            include /etc/nginx/proxy.conf;
+        }
+
+        location ~ ^/(v1|api) {
+            proxy_pass http://localhost:9380;
+            include /etc/nginx/proxy.conf;
+        }
+
+        location / {
+            index index.html;
+            try_files $uri $uri/ /index.html;
+        }
+
+        location ~ ^/static/(css|js|media)/ {
+            expires 10y;
+            access_log off;
+        }
+    }
+
+---
+# service_conf.yaml für RagFlow -> Secret "ragflow-config" (sealed, siehe oben)
+# ============================================================
+# ELASTICSEARCH
+# ============================================================
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: es-data
+  namespace: ragflow
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 20Gi
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: es01
+  namespace: ragflow
+  labels:
+    app: es01
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: es01
+  template:
+    metadata:
+      labels:
+        app: es01
+    spec:
+      securityContext:
+        fsGroup: 1000
+      initContainers:
+        - name: vm-max-map
+          image: busybox
+          command: ["sysctl", "-w", "vm.max_map_count=262144"]
+          securityContext:
+            privileged: true
+        - name: fix-permissions
+          image: busybox
+          securityContext:
+            runAsUser: 0
+          command: ["sh", "-c", "chown -R 1000:1000 /data && chmod -R 755 /data && rm -f /data/node.lock"]
+          volumeMounts:
+            - name: es-data
+              mountPath: /data
+      containers:
+        - name: elasticsearch
+          image: elasticsearch:8.11.3
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 9200
+            - containerPort: 9300
+          env:
+            - name: discovery.type
+              value: "single-node"
+            - name: xpack.security.enabled
+              value: "false"
+            - name: ES_JAVA_OPTS
+              value: "-Xms512m -Xmx512m"
+            - name: ELASTIC_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: ragflow-secrets
+                  key: es-password
+          resources:
+            requests:
+              cpu: 300m
+              memory: 768Mi
+            limits:
+              cpu: 1000m
+              memory: 1Gi
+          volumeMounts:
+            - name: es-data
+              mountPath: /usr/share/elasticsearch/data
+      volumes:
+        - name: es-data
+          persistentVolumeClaim:
+            claimName: es-data
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: es01
+  namespace: ragflow
+spec:
+  selector:
+    app: es01
+  ports:
+    - name: http
+      port: 9200
+      targetPort: 9200
+    - name: transport
+      port: 9300
+      targetPort: 9300
+
+---
+# ============================================================
+# MYSQL
+# ============================================================
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mysql-data
+  namespace: ragflow
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 10Gi
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mysql
+  namespace: ragflow
+  labels:
+    app: mysql
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mysql
+  template:
+    metadata:
+      labels:
+        app: mysql
+    spec:
+      containers:
+        - name: mysql
+          image: mysql:8.0.39
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 3306
+          env:
+            - name: MYSQL_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: ragflow-secrets
+                  key: mysql-root-password
+            - name: MYSQL_DATABASE
+              value: "rag_flow"
+          args:
+            - --character-set-server=utf8mb4
+            - --collation-server=utf8mb4_unicode_ci
+            - --max_allowed_packet=128M
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          volumeMounts:
+            - name: mysql-data
+              mountPath: /var/lib/mysql
+      volumes:
+        - name: mysql-data
+          persistentVolumeClaim:
+            claimName: mysql-data
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysql
+  namespace: ragflow
+spec:
+  selector:
+    app: mysql
+  ports:
+    - port: 3306
+      targetPort: 3306
+
+---
+# ============================================================
+# REDIS
+# ============================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: ragflow
+  labels:
+    app: redis
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+    spec:
+      containers:
+        - name: redis
+          image: valkey/valkey:7.2.5-alpine
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 6379
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: ragflow
+spec:
+  selector:
+    app: redis
+  ports:
+    - port: 6379
+      targetPort: 6379
+
+---
+# ============================================================
+# MINIO
+# ============================================================
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: minio-data
+  namespace: ragflow
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 30Gi
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: minio
+  namespace: ragflow
+  labels:
+    app: minio
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: minio
+  template:
+    metadata:
+      labels:
+        app: minio
+    spec:
+      containers:
+        - name: minio
+          image: quay.io/minio/minio:RELEASE.2023-12-20T01-00-02Z
+          imagePullPolicy: IfNotPresent
+          command: ["minio", "server", "/data", "--console-address", ":9001"]
+          ports:
+            - containerPort: 9000
+            - containerPort: 9001
+          env:
+            - name: MINIO_ROOT_USER
+              valueFrom:
+                secretKeyRef:
+                  name: ragflow-secrets
+                  key: minio-user
+            - name: MINIO_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: ragflow-secrets
+                  key: minio-password
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              cpu: 1000m
+              memory: 512Mi
+          volumeMounts:
+            - name: minio-data
+              mountPath: /data
+      volumes:
+        - name: minio-data
+          persistentVolumeClaim:
+            claimName: minio-data
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: minio
+  namespace: ragflow
+spec:
+  selector:
+    app: minio
+  ports:
+    - name: api
+      port: 9000
+      targetPort: 9000
+    - name: console
+      port: 9001
+      targetPort: 9001
+
+---
+# ============================================================
+# RAGFLOW
+# ============================================================
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ragflow-data
+  namespace: ragflow
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 10Gi
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ragflow
+  namespace: ragflow
+  labels:
+    app: ragflow
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ragflow
+  template:
+    metadata:
+      labels:
+        app: ragflow
+    spec:
+      containers:
+        - name: ragflow
+          image: infiniflow/ragflow:v0.17.2
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 80
+            - containerPort: 443
+          env:
+            - name: TZ
+              value: "Europe/Zurich"
+            - name: HF_ENDPOINT
+              value: "https://huggingface.co"
+            # LiteLLM als OpenAI-kompatibler Provider
+            # Nach dem Start in UI konfigurieren:
+            # Settings → Model Providers → OpenAI-API-compatible
+            #   Base URL: http://litellm.ai-tools.svc.cluster.local:4000
+            #   API Key:  LiteLLM master key (Secret litellm-api-keys / LITELLM_MASTER_KEY)
+            #   Models:   gpt-4o-mini, ollama/qwen3:8b
+            - name: OPENAI_API_BASE
+              value: "http://litellm.ai-tools.svc.cluster.local:4000"
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: ragflow-secrets
+                  key: openai-api-key
+          resources:
+            requests:
+              cpu: 300m
+              memory: 1Gi
+            limits:
+              cpu: 2000m
+              memory: 3Gi
+          volumeMounts:
+            - name: ragflow-data
+              mountPath: /ragflow/logs
+              subPath: logs
+            - name: ragflow-config
+              mountPath: /ragflow/conf/service_conf.yaml
+              subPath: service_conf.yaml
+            - name: ragflow-nginx-config
+              mountPath: /etc/nginx/nginx.conf
+              subPath: nginx.conf
+            - name: ragflow-nginx-config
+              mountPath: /etc/nginx/conf.d/ragflow.conf
+              subPath: ragflow.conf
+            - name: ragflow-nginx-config
+              mountPath: /etc/nginx/proxy.conf
+              subPath: proxy.conf
+      volumes:
+        - name: ragflow-data
+          persistentVolumeClaim:
+            claimName: ragflow-data
+        - name: ragflow-config
+          secret:
+            secretName: ragflow-config
+        - name: ragflow-nginx-config
+          configMap:
+            name: ragflow-nginx-config
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ragflow
+  namespace: ragflow
+  labels:
+    app: ragflow
+spec:
+  selector:
+    app: ragflow
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80
+
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ragflow
+  namespace: ragflow
+  annotations:
+    cert-manager.io/cluster-issuer: internal-ca-issuer
+spec:
+  ingressClassName: cilium
+  tls:
+    - hosts:
+        - ragflow.home.local
+      secretName: ragflow-tls
+  rules:
+    - host: ragflow.home.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: ragflow
+                port:
+                  number: 80

@@ -51,13 +51,13 @@ variable "network_bridge" {
 variable "cluster_name" {
   description = "Talos cluster name"
   type        = string
-  default     = "talos-cluster"
+  default     = "home-k8s-cluster"
 }
 
 variable "talos_version" {
   description = "Talos version"
   type        = string
-  default     = "v1.10.2"
+  default     = "v1.14.1"
 }
 
 # Controller Node Configuration
@@ -83,19 +83,19 @@ variable "controller_disk_size" {
 variable "worker_cpu_cores" {
   description = "Number of CPU cores for worker nodes"
   type        = number
-  default     = 2
+  default     = 4
 }
 
 variable "worker_memory" {
   description = "Memory in MB for worker nodes"
   type        = number
-  default     = 4096
+  default     = 8192
 }
 
 variable "worker_disk_size" {
   description = "Disk size in GB for worker nodes"
   type        = number
-  default     = 64
+  default     = 80
 }
 
 # Network Configuration
@@ -109,13 +109,13 @@ variable "metallb_ip_range" {
 variable "cilium_version" {
   description = "Cilium CNI version"
   type        = string
-  default     = "1.16.5"
+  default     = "1.18.4"
 }
 
 variable "metallb_version" {
   description = "MetalLB version"
   type        = string
-  default     = "0.14.8"
+  default     = "0.15.2"
 }
 
 variable "cert_manager_version" {
@@ -140,4 +140,10 @@ variable "argocd_version" {
   description = "ArgoCD version"
   type        = string
   default     = "8.0.9"
+}
+
+variable "longhorn_version" {
+  description = "Longhorn chart version"
+  type        = string
+  default     = "1.7.2"
 }

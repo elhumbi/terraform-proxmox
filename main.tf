@@ -6,11 +6,11 @@ terraform {
     }
     talos = {
       source  = "siderolabs/talos"
-      version = "~> 0.4"
+      version = "~> 0.11"
     }
     helm = {
       source  = "hashicorp/helm"
-      version = "~> 2.10"
+      version = "~> 3.0"
     }
     kubernetes = {
       source  = "hashicorp/kubernetes"
@@ -75,7 +75,7 @@ data "talos_machine_configuration" "controller" {
         }
         install = {
           disk       = "/dev/sda"
-          image      = "factory.talos.dev/installer/ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515:${var.talos_version}"
+          image      = "factory.talos.dev/metal-installer/613e1592b2da41ae5e265e8789429f22e121aab91cb4deb6bc3c0b6262961245:${var.talos_version}"
           bootloader = true
           wipe       = false
         }
@@ -107,7 +107,7 @@ data "talos_machine_configuration" "worker" {
         }
         install = {
           disk       = "/dev/sda"
-          image      = "factory.talos.dev/installer/ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515:${var.talos_version}"
+          image      = "factory.talos.dev/metal-installer/613e1592b2da41ae5e265e8789429f22e121aab91cb4deb6bc3c0b6262961245:${var.talos_version}"
           bootloader = true
           wipe       = false
         }
@@ -149,7 +149,6 @@ resource "proxmox_virtual_environment_vm" "controller" {
     mac_address = each.value
   }
 
-  # Primary disk for installation
   disk {
     datastore_id = var.storage_name
     interface    = "scsi0"
@@ -158,13 +157,13 @@ resource "proxmox_virtual_environment_vm" "controller" {
     size         = var.controller_disk_size
   }
 
-  # CD-ROM for ISO boot
   cdrom {
     file_id   = local.talos_iso_id
     interface = "ide0"
   }
 
-  boot_order = ["ide0", "scsi0"]
+  #boot_order = ["ide0","scsi0"]
+  boot_order = ["scsi0"]
 
   started = true
 }
@@ -192,7 +191,6 @@ resource "proxmox_virtual_environment_vm" "worker" {
     mac_address = each.value
   }
 
-  # Primary disk for installation
   disk {
     datastore_id = var.storage_name
     interface    = "scsi0"
@@ -201,13 +199,12 @@ resource "proxmox_virtual_environment_vm" "worker" {
     size         = var.worker_disk_size
   }
 
-  # CD-ROM for ISO boot
   cdrom {
     file_id   = local.talos_iso_id
     interface = "ide0"
   }
-
-  boot_order = ["ide0", "scsi0"]
+  #boot_order = ["ide0", "scsi0"]
+  boot_order = ["scsi0"]
 
   started = true
 }
@@ -248,7 +245,7 @@ resource "talos_machine_bootstrap" "this" {
 }
 
 # Get kubeconfig
-data "talos_cluster_kubeconfig" "this" {
+resource "talos_cluster_kubeconfig" "this" {
   depends_on = [talos_machine_bootstrap.this]
 
   client_configuration = talos_machine_secrets.this.client_configuration
@@ -258,8 +255,8 @@ data "talos_cluster_kubeconfig" "this" {
 
 # Save kubeconfig to file
 resource "local_file" "kubeconfig" {
-  depends_on = [data.talos_cluster_kubeconfig.this]
-  content    = data.talos_cluster_kubeconfig.this.kubeconfig_raw
+  depends_on = [talos_cluster_kubeconfig.this]
+  content    = talos_cluster_kubeconfig.this.kubeconfig_raw
   filename   = "${path.module}/kubeconfig"
 }
 
@@ -269,10 +266,11 @@ provider "kubernetes" {
 }
 
 provider "helm" {
-  kubernetes {
+  kubernetes = {
     config_path = local_file.kubeconfig.filename
   }
 }
+
 
 provider "kubectl" {
   config_path = local_file.kubeconfig.filename
@@ -288,127 +286,66 @@ resource "helm_release" "cilium" {
   namespace  = "kube-system"
   version    = var.cilium_version
 
-  set {
-    name  = "ipam.mode"
-    value = "kubernetes"
-  }
-
-  set {
-    name  = "kubeProxyReplacement"
-    value = "true"
-  }
-
-  set {
-    name  = "securityContext.capabilities.ciliumAgent"
-    value = "{CHOWN,KILL,NET_ADMIN,NET_RAW,IPC_LOCK,SYS_ADMIN,SYS_RESOURCE,DAC_OVERRIDE,FOWNER,SETGID,SETUID}"
-  }
-
-  set {
-    name  = "securityContext.capabilities.cleanCiliumState"
-    value = "{NET_ADMIN,SYS_ADMIN,SYS_RESOURCE}"
-  }
-
-  set {
-    name  = "cgroup.autoMount.enabled"
-    value = "false"
-  }
-
-  set {
-    name  = "cgroup.hostRoot"
-    value = "/sys/fs/cgroup"
-  }
-
-  set {
-    name  = "k8sServiceHost"
-    value = local.cluster_vip
-  }
-
-  set {
-    name  = "k8sServicePort"
-    value = "6443"
-  }
-
-  # Enable Hubble for observability
-  set {
-    name  = "hubble.enabled"
-    value = "true"
-  }
-
-  set {
-    name  = "hubble.relay.enabled"
-    value = "true"
-  }
-
-  set {
-    name  = "hubble.ui.enabled"
-    value = "true"
-  }
-
-  # Enable Cilium Ingress Controller
-  set {
-    name  = "ingressController.enabled"
-    value = "true"
-  }
-
-  set {
-    name  = "ingressController.loadbalancerMode"
-    value = "shared"
-  }
-
-  set {
-    name  = "ingressController.service.type"
-    value = "LoadBalancer"
-  }
+  set = [
+    {
+      name  = "ipam.mode"
+      value = "kubernetes"
+    },
+    {
+      name  = "kubeProxyReplacement"
+      value = "true"
+    },
+    {
+      name  = "securityContext.capabilities.ciliumAgent"
+      value = "{CHOWN,KILL,NET_ADMIN,NET_RAW,IPC_LOCK,SYS_ADMIN,SYS_RESOURCE,DAC_OVERRIDE,FOWNER,SETGID,SETUID}"
+    },
+    {
+      name  = "securityContext.capabilities.cleanCiliumState"
+      value = "{NET_ADMIN,SYS_ADMIN,SYS_RESOURCE}"
+    },
+    {
+      name  = "cgroup.autoMount.enabled"
+      value = "false"
+    },
+    {
+      name  = "cgroup.hostRoot"
+      value = "/sys/fs/cgroup"
+    },
+    {
+      name  = "k8sServiceHost"
+      value = local.cluster_vip
+    },
+    {
+      name  = "k8sServicePort"
+      value = "6443"
+    },
+    {
+      name  = "hubble.enabled"
+      value = "true"
+    },
+    {
+      name  = "hubble.relay.enabled"
+      value = "true"
+    },
+    {
+      name  = "hubble.ui.enabled"
+      value = "true"
+    },
+    {
+      name  = "ingressController.enabled"
+      value = "true"
+    },
+    {
+      name  = "ingressController.loadbalancerMode"
+      value = "shared"
+    },
+    {
+      name  = "ingressController.service.type"
+      value = "LoadBalancer"
+    }
+  ]
 }
 
-# Create Hubble UI Ingress
-resource "kubectl_manifest" "hubble_ui_ingress" {
-  depends_on = [helm_release.cilium, kubectl_manifest.internal_ca_issuer]
-
-  yaml_body = yamlencode({
-    apiVersion = "networking.k8s.io/v1"
-    kind       = "Ingress"
-    metadata = {
-      name      = "hubble-ui-ingress"
-      namespace = "kube-system"
-      annotations = {
-        "cert-manager.io/cluster-issuer" = "internal-ca-issuer"
-        "nginx.ingress.kubernetes.io/ssl-redirect" = "true"
-        "nginx.ingress.kubernetes.io/backend-protocol" = "HTTP"
-      }
-    }
-    spec = {
-      ingressClassName = "cilium"
-      tls = [
-        {
-          hosts = ["hubble.home.local"]
-          secretName = "hubble-ui-tls"
-        }
-      ]
-      rules = [
-        {
-          host = "hubble.home.local"
-          http = {
-            paths = [
-              {
-                path = "/"
-                pathType = "Prefix"
-                backend = {
-                  service = {
-                    name = "hubble-ui"
-                    port = {
-                      number = 80
-                    }
-                  }
-                }
-              }
-            ]
-          }
-        }
-      ]
-    }
-  })
-}
 
 # Create MetalLB namespace with privileged security policy
 resource "kubernetes_namespace" "metallb_system" {
@@ -507,16 +444,18 @@ resource "helm_release" "cert_manager" {
 
   create_namespace = true
 
-  set {
-    name  = "installCRDs"
-    value = "true"
-  }
-
-  set {
-    name  = "global.leaderElection.namespace"
-    value = "cert-manager"
-  }
+  set = [
+    {
+      name  = "installCRDs"
+      value = "true"
+    },
+    {
+      name  = "global.leaderElection.namespace"
+      value = "cert-manager"
+    }
+  ]
 }
+
 
 # Create self-signed ClusterIssuer for internal CA
 resource "kubectl_manifest" "selfsigned_issuer" {
@@ -546,16 +485,16 @@ resource "kubectl_manifest" "internal_ca_cert" {
       namespace = "cert-manager"
     }
     spec = {
-      isCA = true
+      isCA       = true
       commonName = "home.local Internal CA"
       secretName = "internal-ca-secret"
-      duration = "8760h" # 1 year
-      renewBefore = "720h" # 30 days
+      duration   = "8760h"
+      renewBefore = "720h"
       subject = {
-        countries = ["CH"]
-        localities = ["Wuerenlos"]
-        organizationalUnits = ["IT Department"]
-        organizations = ["home.local"]
+        countries             = ["CH"]
+        localities            = ["Wuerenlos"]
+        organizationalUnits   = ["IT Department"]
+        organizations         = ["home.local"]
       }
       issuerRef = {
         name = "selfsigned-issuer"
@@ -583,9 +522,110 @@ resource "kubectl_manifest" "internal_ca_issuer" {
   })
 }
 
+# Install Longhorn StorageClass
+resource "helm_release" "longhorn" {
+  depends_on = [kubectl_manifest.internal_ca_issuer]
+
+  name       = "longhorn"
+  repository = "https://charts.longhorn.io"
+  chart      = "longhorn"
+  namespace  = "longhorn-system"
+  version    = var.longhorn_version
+
+  create_namespace = true
+
+  set = [
+    {
+      name  = "persistence.defaultClass"
+      value = "true"
+    },
+    {
+      name  = "persistence.defaultClassReplicaCount"
+      value = "2"
+    },
+    {
+      name  = "persistence.reclaimPolicy"
+      value = "Delete"
+    },
+    {
+      name  = "ingress.enabled"
+      value = "true"
+    },
+    {
+      name  = "ingress.ingressClassName"
+      value = "cilium"
+    },
+    {
+      name  = "ingress.host"
+      value = "longhorn.home.local"
+    },
+    {
+      name  = "ingress.annotations.cert-manager\\.io/cluster-issuer"
+      value = "internal-ca-issuer"
+    },
+    {
+      name  = "ingress.tls"
+      value = "true"
+    },
+    {
+      name  = "ingress.tlsSecret"
+      value = "longhorn-tls"
+    }
+  ]
+}
+
+# Create Hubble UI Ingress
+resource "kubectl_manifest" "hubble_ui_ingress" {
+  depends_on = [helm_release.cilium, kubectl_manifest.internal_ca_issuer]
+
+  yaml_body = yamlencode({
+    apiVersion = "networking.k8s.io/v1"
+    kind       = "Ingress"
+    metadata = {
+      name      = "hubble-ui-ingress"
+      namespace = "kube-system"
+      annotations = {
+        "cert-manager.io/cluster-issuer"                 = "internal-ca-issuer"
+        "nginx.ingress.kubernetes.io/ssl-redirect"       = "true"
+        "nginx.ingress.kubernetes.io/backend-protocol"   = "HTTP"
+      }
+    }
+    spec = {
+      ingressClassName = "cilium"
+      tls = [
+        {
+          hosts      = ["hubble.home.local"]
+          secretName = "hubble-ui-tls"
+        }
+      ]
+      rules = [
+        {
+          host = "hubble.home.local"
+          http = {
+            paths = [
+              {
+                path     = "/"
+                pathType = "Prefix"
+                backend = {
+                  service = {
+                    name = "hubble-ui"
+                    port = {
+                      number = 80
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        }
+      ]
+    }
+  })
+}
+
 # Install Kubernetes Dashboard
 resource "helm_release" "kubernetes_dashboard" {
-  depends_on = [kubectl_manifest.internal_ca_issuer]
+  depends_on = [helm_release.longhorn]
 
   name       = "kubernetes-dashboard"
   repository = "https://kubernetes.github.io/dashboard/"
@@ -598,7 +638,7 @@ resource "helm_release" "kubernetes_dashboard" {
   values = [
     yamlencode({
       service = {
-        type = "ClusterIP"  # Use Ingress instead of LoadBalancer
+        type = "ClusterIP"
       }
       extraArgs = [
         "--enable-skip-login",
@@ -608,14 +648,14 @@ resource "helm_release" "kubernetes_dashboard" {
         clusterReadOnlyRole = true
       }
       ingress = {
-        enabled = true
-        className = "cilium"
+        enabled       = true
+        className     = "cilium"
         hosts = [
           {
             host = "dashboard.home.local"
             paths = [
               {
-                path = "/"
+                path     = "/"
                 pathType = "Prefix"
               }
             ]
@@ -624,12 +664,12 @@ resource "helm_release" "kubernetes_dashboard" {
         tls = [
           {
             secretName = "dashboard-tls"
-            hosts = ["dashboard.home.local"]
+            hosts      = ["dashboard.home.local"]
           }
         ]
         annotations = {
-          "cert-manager.io/cluster-issuer" = "internal-ca-issuer"
-          "nginx.ingress.kubernetes.io/ssl-redirect" = "true"
+          "cert-manager.io/cluster-issuer"               = "internal-ca-issuer"
+          "nginx.ingress.kubernetes.io/ssl-redirect"     = "true"
           "nginx.ingress.kubernetes.io/backend-protocol" = "HTTPS"
         }
       }
@@ -674,9 +714,9 @@ resource "kubectl_manifest" "dashboard_admin_binding" {
   })
 }
 
-# Install ArgoCD
+# Install ArgoCD with PVC support
 resource "helm_release" "argocd" {
-  depends_on = [kubectl_manifest.internal_ca_issuer]
+  depends_on = [helm_release.longhorn]
 
   name       = "argocd"
   repository = "https://argoproj.github.io/argo-helm"
@@ -693,18 +733,18 @@ resource "helm_release" "argocd" {
       }
       server = {
         service = {
-          type = "ClusterIP"  # Back to ClusterIP for Ingress
+          type = "ClusterIP"
         }
         extraArgs = [
           "--insecure"
         ]
         ingress = {
-          enabled = true
-          ingressClassName = "cilium"
-          hostname = "argocd.home.local"
+          enabled           = true
+          ingressClassName  = "cilium"
+          hostname          = "argocd.home.local"
           annotations = {
-            "cert-manager.io/cluster-issuer" = "internal-ca-issuer"
-            "nginx.ingress.kubernetes.io/ssl-redirect" = "true"
+            "cert-manager.io/cluster-issuer"               = "internal-ca-issuer"
+            "nginx.ingress.kubernetes.io/ssl-redirect"     = "true"
             "nginx.ingress.kubernetes.io/backend-protocol" = "HTTP"
           }
           tls = true
@@ -725,6 +765,19 @@ resource "helm_release" "argocd" {
           enabled = true
         }
       }
+      persistence = {
+        enabled      = true
+        storageClass = "longhorn"
+        size         = "10Gi"
+        accessMode   = "ReadWriteOnce"
+      }
+      redis = {
+        persistence = {
+          enabled      = true
+          storageClass = "longhorn"
+          size         = "5Gi"
+        }
+      }
     })
   ]
 }
@@ -738,7 +791,7 @@ output "talos_config" {
 
 output "kubeconfig" {
   description = "Kubernetes configuration"
-  value       = data.talos_cluster_kubeconfig.this.kubeconfig_raw
+  value       = talos_cluster_kubeconfig.this.kubeconfig_raw
   sensitive   = true
 }
 
@@ -757,7 +810,6 @@ output "worker_ips" {
   value       = local.worker_ips
 }
 
-# Output for internal CA certificate (to import into browsers/systems)
 output "internal_ca_certificate" {
   description = "Internal CA certificate for importing into browsers"
   value       = "kubectl get secret internal-ca-secret -n cert-manager -o jsonpath='{.data.ca\\.crt}' | base64 -d"
@@ -769,6 +821,16 @@ output "ingress_ip" {
   value       = "kubectl get svc cilium-ingress -n kube-system -o jsonpath='{.status.loadBalancer.ingress[0].ip}'"
 }
 
+output "longhorn_status" {
+  description = "Check Longhorn status"
+  value       = "kubectl get pods -n longhorn-system"
+}
+
+output "argocd_status" {
+  description = "Check ArgoCD pods and PVC"
+  value       = "kubectl get pods,pvc -n argocd"
+}
+
 output "dns_entries" {
   description = "DNS entries for /etc/hosts"
   value = <<-EOF
@@ -776,6 +838,7 @@ output "dns_entries" {
 # <INGRESS-IP>  argocd.home.local
 # <INGRESS-IP>  dashboard.home.local  
 # <INGRESS-IP>  hubble.home.local
+# <INGRESS-IP>  longhorn.home.local
 
 # To get the Ingress IP run:
 kubectl get svc cilium-ingress -n kube-system -o jsonpath='{.status.loadBalancer.ingress[0].ip}'

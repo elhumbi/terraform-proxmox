@@ -1,0 +1,39 @@
+hubble:
+  enabled: true
+  relay:
+    enabled: true
+  ui:
+    enabled: true
+
+  metrics:
+    enabled:
+      - dns:query;ignoreAAAA
+      - drop:sourceContext=pod;destinationContext=pod
+      - tcp:sourceContext=pod;destinationContext=pod
+      - flow:sourceContext=workload;destinationContext=workload;labelsContext=source_namespace,destination_namespace
+      - port-distribution:sourceContext=pod;destinationContext=pod
+      # httpV2 requires L7 visibility annotations on pods (cilium.io/proxy-visibility: "<Ingress/Egress,port,proto>")
+      - httpV2:exemplars=true;labelsContext=source_namespace,source_workload,destination_namespace,destination_workload,traffic_direction
+    serviceMonitor:
+      enabled: true
+      # no labels needed — Prometheus uses serviceMonitorSelector: {}
+
+  export:
+    static:
+      enabled: true
+      # Cilium agent mounts /var/run/cilium as hostPath →
+      # alloy-logs DaemonSet kann diese Datei auf jedem Node lesen
+      filePath: /var/run/cilium/hubble/events.log
+      fieldMask:
+        - time
+        - verdict
+        - traffic_direction
+        - Type
+        - source.namespace
+        - source.pod_name
+        - source.workloads
+        - destination.namespace
+        - destination.pod_name
+        - destination.workloads
+        - l4
+        - drop_reason_desc
